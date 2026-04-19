@@ -31,7 +31,7 @@ my-issues:
 review-requests:
   name: review-requests
   tool:
-    command: ["gh", "search", "prs", "--review-requested=@me", "--state=open", "--json", "number,title,url,repository,state,body,updatedAt"]
+    command: ["gh", "search", "prs", "--review-requested=@me", "--state=open", "--json", "number,title,url,repository,state,body,updatedAt,labels"]
   item:
     id: "{url}"
   repo: "{repository.nameWithOwner}"

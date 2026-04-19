@@ -236,14 +236,29 @@ export async function pollOnce(options = {}) {
       // Check if already processed (by item ID)
       let existingDirectory = null;
       if (pollerInstance && pollerInstance.isProcessed(item.id)) {
-        // Check if item should be reprocessed (reopened, status changed, etc.)
-        if (pollerInstance.shouldReprocess(item, { reprocessOn })) {
-          debug(`Reprocessing ${item.id} - state changed`);
+        // Check reprocess_labels: if the item has a label that triggers re-processing
+        const reprocessLabels = source.reprocess_labels || [];
+        let labelTrigger = false;
+        if (reprocessLabels.length > 0) {
+          const itemLabels = (item.labels || []).map((l) =>
+            typeof l === "string" ? l.toLowerCase() : (l.name || "").toLowerCase()
+          );
+          for (const triggerLabel of reprocessLabels) {
+            if (itemLabels.includes(triggerLabel.toLowerCase())) {
+              labelTrigger = true;
+              debug(`Reprocessing ${item.id} - has reprocess label: ${triggerLabel}`);
+              break;
+            }
+          }
+        }
+        // Check if item should be reprocessed (reopened, status changed, label trigger, etc.)
+        if (labelTrigger || pollerInstance.shouldReprocess(item, { reprocessOn })) {
+          debug(`Reprocessing ${item.id} - ${labelTrigger ? 'label trigger' : 'state changed'}`);
           // Get the stored directory before clearing state (for worktree reuse)
           const prevMeta = pollerInstance.getProcessedMeta(item.id);
           existingDirectory = prevMeta?.directory || null;
           pollerInstance.clearProcessed(item.id);
-          console.log(`[poll] Reprocessing ${item.id} (reopened or updated)`);
+          console.log(`[poll] Reprocessing ${item.id} (${labelTrigger ? 'label trigger' : 'reopened or updated'})`);
         } else {
           debug(`Skipping ${item.id} - already processed`);
           continue;

@@ -240,6 +240,15 @@ async function startCommand() {
     httpPort: getPortFromConfig(),
   };
   
+  try {
+    const configPath = join(os.homedir(), '.config', 'opencode', 'pilot', 'config.yaml');
+    const configContent = readFileSync(configPath, 'utf-8');
+    const parsed = YAML.parse(configContent);
+    if (parsed?.poll_interval && typeof parsed.poll_interval === "number") {
+      config.pollInterval = parsed.poll_interval;
+    }
+  } catch {}
+  
   const service = await startService(config);
   
   // Handle graceful shutdown

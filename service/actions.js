@@ -177,7 +177,7 @@ async function getOpencodePorts() {
   try {
     // Use full path to lsof since /usr/sbin may not be in PATH in all contexts
     // (e.g., when running as a service or from certain shell environments)
-    const output = execSync('/usr/sbin/lsof -i -P 2>/dev/null | grep -E "opencode.*LISTEN" || true', {
+    const output = execSync('lsof -i -P 2>/dev/null | grep -E "opencode.*LISTEN" || true', {
       encoding: 'utf-8',
       timeout: 30000
     });
