@@ -23,6 +23,16 @@ defaults:
   # Format: provider/model-id (e.g., anthropic/claude-sonnet-4-20250514)
   # If no provider prefix, defaults to "anthropic"
   # model: anthropic/claude-sonnet-4-20250514
+  #
+  # Priority chain with automatic failover: pilot tries each model in order
+  # and uses the first one whose provider is not in cooldown. On an exhaustion
+  # error (rate limit / quota / "extra usage"), the provider is marked
+  # exhausted for 5h with exponential backoff (capped at 1 week). When all
+  # providers in the chain are exhausted, the work item is skipped and will
+  # be re-evaluated on the next poll cycle.
+  # models:
+  #   - anthropic/claude-opus-4-7
+  #   - zai-coding-plan/glm-5.1
   # Session reuse: append to existing non-archived session instead of creating new
   # Default: true. Set to false to always create new sessions.
   # reuse_active_session: true

@@ -239,7 +239,7 @@ function normalizeSource(source, defaults) {
   // This allows downstream config builders to apply the correct priority:
   //   explicit source > repo > defaults
   merged._explicit = {};
-  for (const field of ['model', 'agent', 'prompt', 'working_dir']) {
+  for (const field of ['model', 'models', 'agent', 'prompt', 'working_dir']) {
     if (normalized[field] !== undefined) {
       merged._explicit[field] = normalized[field];
     }

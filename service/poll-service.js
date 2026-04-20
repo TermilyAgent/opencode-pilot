@@ -259,6 +259,40 @@ export async function pollOnce(options = {}) {
           existingDirectory = prevMeta?.directory || null;
           pollerInstance.clearProcessed(item.id);
           console.log(`[poll] Reprocessing ${item.id} (${labelTrigger ? 'label trigger' : 'reopened or updated'})`);
+
+          // Remove reprocess_labels IMMEDIATELY so concurrent/next poll cycles
+          // don't re-trigger while executeAction is still running (message send
+          // can take 5+ minutes). This must happen before executeAction, not after.
+          if (labelTrigger && item.url) {
+            const urlMatch = item.url.match(/github\.com\/([^/]+\/[^/]+)\/(pull|issues?)\/(\d+)/);
+            if (urlMatch) {
+              const repoFullName = urlMatch[1];
+              const issueNum = urlMatch[3];
+              for (const label of reprocessLabels) {
+                try {
+                  const { execSync } = await import('child_process');
+                  execSync(
+                    `gh issue edit ${issueNum} --repo ${repoFullName} --remove-label "${label}"`,
+                    { stdio: 'pipe', timeout: 15000 }
+                  );
+                  console.log(`[poll] Removed label "${label}" from ${repoFullName}#${issueNum} (pre-execute)`);
+                } catch (labelErr) {
+                  debug(`Could not remove label "${label}" from ${repoFullName}#${issueNum}: ${labelErr.message}`);
+                }
+              }
+            }
+          }
+
+          // Also mark as processed immediately (with a placeholder) so the item is
+          // treated as in-flight. executeAction may take minutes; markProcessed below
+          // will overwrite with the real session info.
+          pollerInstance.markProcessed(item.id, {
+            repoKey: item.repo_key,
+            source: sourceName,
+            itemState: item.state || item.status || null,
+            itemUpdatedAt: item.updated_at || null,
+            inFlight: true,
+          });
         } else {
           debug(`Skipping ${item.id} - already processed`);
           continue;
@@ -349,28 +383,6 @@ export async function pollOnce(options = {}) {
               });
             }
 
-            // Programmatically remove reprocess_labels so the item isn't re-triggered
-            const reprocessLabels = source.reprocess_labels || [];
-            if (reprocessLabels.length > 0 && item.url) {
-              // Extract owner/repo/number from item URL (e.g. https://github.com/owner/repo/pull/14)
-              const urlMatch = item.url.match(/github\.com\/([^/]+\/[^/]+)\/(pull|issues?)\/(\d+)/);
-              if (urlMatch) {
-                const repoFullName = urlMatch[1];
-                const issueNum = urlMatch[3];
-                for (const label of reprocessLabels) {
-                  try {
-                    const { execSync } = await import('child_process');
-                    execSync(
-                      `gh issue edit ${issueNum} --repo ${repoFullName} --remove-label "${label}"`,
-                      { stdio: 'pipe', timeout: 15000 }
-                    );
-                    console.log(`[poll] Removed label "${label}" from ${repoFullName}#${issueNum}`);
-                  } catch (labelErr) {
-                    debug(`Could not remove label "${label}" from ${repoFullName}#${issueNum}: ${labelErr.message}`);
-                  }
-                }
-              }
-            }
             if (result.warning) {
               console.log(`[poll] Started session for ${item.id} (warning: ${result.warning})`);
             } else {

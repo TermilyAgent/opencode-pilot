@@ -26,6 +26,13 @@ import { getNestedValue } from "./utils.js";
 import { getServerPort } from "./repo-config.js";
 import { resolveWorktreeDirectory, getProjectInfo, getProjectInfoForDirectory } from "./worktree.js";
 import { SessionContext } from "./session-context.js";
+import {
+  pickModel,
+  resolveModelChain,
+  markExhausted,
+  markHealthy,
+  isExhaustionError,
+} from "./provider-health.js";
 import path from "path";
 import os from "os";
 
@@ -961,26 +968,65 @@ async function executeInDirectory(serverUrl, sessionCtx, item, config, options =
 
   // Build prompt from template
   const prompt = buildPromptFromTemplate(config.prompt || "default", item);
-  
+
   // Build session title
   const sessionTitle = config.session?.name
     ? buildSessionName(config.session.name, item)
     : (item.title || `session-${Date.now()}`);
-  
+
+  // Resolve model from priority chain. `config.models` (array) takes precedence
+  // over `config.model` (single string). pickModel returns the first model
+  // whose provider is not in cooldown; null means all providers exhausted.
+  const chain = resolveModelChain(config);
+  let pickedModel = config.model;
+  let pickedProvider = null;
+
+  if (chain.length > 0) {
+    const picked = pickModel(chain);
+    if (!picked) {
+      const msg = `all providers exhausted (chain: ${chain.join(", ")})`;
+      debug(`executeInDirectory: ${msg}`);
+      return {
+        command: null,
+        success: false,
+        directory: cwd,
+        error: msg,
+        allProvidersExhausted: true,
+      };
+    }
+    pickedModel = picked.model;
+    pickedProvider = picked.providerID;
+    if (chain.length > 1 && pickedModel !== chain[0]) {
+      debug(`executeInDirectory: primary model ${chain[0]} unhealthy, using ${pickedModel}`);
+    }
+  }
+
+  const markResultHealth = (res) => {
+    if (!pickedProvider) return;
+    const signal = res?.error || res?.warning || "";
+    if (isExhaustionError(signal)) {
+      markExhausted(pickedProvider, { reason: signal });
+      debug(`executeInDirectory: marked ${pickedProvider} exhausted (${signal})`);
+    } else if (res?.success) {
+      markHealthy(pickedProvider);
+    }
+  };
+
   // Check if we should reuse a stack sibling's session
   // This is set when another PR in the same stack was already processed
   if (config.reuse_stack_session && !options.dryRun) {
     try {
       debug(`executeInDirectory: trying stack session reuse ${config.reuse_stack_session} for ${cwd}`);
-      
+
       const stackResult = await sendMessageToSession(serverUrl, config.reuse_stack_session, cwd, prompt, {
         title: sessionTitle,
         agent: config.agent,
-        model: config.model,
+        model: pickedModel,
         fetch: options.fetch,
       });
-      
+
       if (stackResult.success) {
+        markResultHealth(stackResult);
         const stackCommand = `[API] POST ${serverUrl}/session/${config.reuse_stack_session}/message (stack reuse)`;
         return {
           command: stackCommand,
@@ -989,35 +1035,38 @@ async function executeInDirectory(serverUrl, sessionCtx, item, config, options =
           directory: cwd,
           sessionReused: true,
           error: stackResult.error,
+          model: pickedModel,
         };
       }
-      
+
       debug(`executeInDirectory: stack session reuse failed, falling through`);
     } catch (err) {
       debug(`executeInDirectory: stack session reuse error, falling through: ${err.message}`);
     }
   }
-  
+
   // Invariant C: skip findReusableSession when in a worktree.
   // Each worktree (= each PR/issue) must get its own session to prevent
   // cross-PR contamination. See session-context.js for full rationale.
   const reuseActiveSession = config.reuse_active_session !== false; // default true
-  
+
   if (reuseActiveSession && !sessionCtx.isWorktree && !options.dryRun) {
     const existingSession = await findReusableSession(serverUrl, cwd, { fetch: options.fetch });
-    
+
     if (existingSession) {
       debug(`executeInDirectory: found reusable session ${existingSession.id} for ${cwd}`);
-      
+
       const reuseCommand = `[API] POST ${serverUrl}/session/${existingSession.id}/message (reusing session)`;
-      
+
       const result = await sendMessageToSession(serverUrl, existingSession.id, cwd, prompt, {
         title: sessionTitle,
         agent: config.agent,
-        model: config.model,
+        model: pickedModel,
         fetch: options.fetch,
       });
-      
+
+      markResultHealth(result);
+
       return {
         command: reuseCommand,
         success: result.success,
@@ -1025,30 +1074,33 @@ async function executeInDirectory(serverUrl, sessionCtx, item, config, options =
         directory: cwd,
         sessionReused: true,
         error: result.error,
+        model: pickedModel,
       };
     }
   }
-  
+
   const apiCommand = `[API] POST ${serverUrl}/session?directory=${cwd}`;
   debug(`executeInDirectory: using HTTP API - ${apiCommand}`);
-  
+
   if (options.dryRun) {
     return {
       command: apiCommand,
       directory: cwd,
       dryRun: true,
-      ...(config.model && { model: config.model }),
+      ...(pickedModel && { model: pickedModel }),
       ...(config.agent && { agent: config.agent }),
     };
   }
-  
+
   const result = await createSessionViaApi(serverUrl, sessionCtx, prompt, {
     title: sessionTitle,
     agent: config.agent,
-    model: config.model,
+    model: pickedModel,
     fetch: options.fetch,
   });
-  
+
+  markResultHealth(result);
+
   return {
     command: apiCommand,
     success: result.success,
@@ -1056,6 +1108,7 @@ async function executeInDirectory(serverUrl, sessionCtx, item, config, options =
     directory: cwd,
     error: result.error,
     warning: result.warning,
+    model: pickedModel,
   };
 }
 
