@@ -87,6 +87,16 @@ export async function createWorktree(serverUrl, options = {}) {
     const worktree = await response.json();
     debug(`createWorktree: created worktree ${worktree.name} at ${worktree.directory}`);
     
+    // Override git identity in the worktree so agent commits show as TermilyAgent
+    try {
+      const { execSync } = await import('child_process');
+      execSync(`git config user.name "TermilyAgent"`, { cwd: worktree.directory, stdio: 'pipe' });
+      execSync(`git config user.email "termily-agent@users.noreply.github.com"`, { cwd: worktree.directory, stdio: 'pipe' });
+      debug(`createWorktree: set git identity to TermilyAgent in ${worktree.directory}`);
+    } catch (cfgErr) {
+      debug(`createWorktree: could not set git identity: ${cfgErr.message}`);
+    }
+    
     return {
       success: true,
       worktree,
