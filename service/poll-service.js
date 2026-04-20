@@ -348,6 +348,29 @@ export async function pollOnce(options = {}) {
                 dedupKeys: dedupKeys.length > 0 ? dedupKeys : undefined,
               });
             }
+
+            // Programmatically remove reprocess_labels so the item isn't re-triggered
+            const reprocessLabels = source.reprocess_labels || [];
+            if (reprocessLabels.length > 0 && item.url) {
+              // Extract owner/repo/number from item URL (e.g. https://github.com/owner/repo/pull/14)
+              const urlMatch = item.url.match(/github\.com\/([^/]+\/[^/]+)\/(pull|issues?)\/(\d+)/);
+              if (urlMatch) {
+                const repoFullName = urlMatch[1];
+                const issueNum = urlMatch[3];
+                for (const label of reprocessLabels) {
+                  try {
+                    const { execSync } = await import('child_process');
+                    execSync(
+                      `gh issue edit ${issueNum} --repo ${repoFullName} --remove-label "${label}"`,
+                      { stdio: 'pipe', timeout: 15000 }
+                    );
+                    console.log(`[poll] Removed label "${label}" from ${repoFullName}#${issueNum}`);
+                  } catch (labelErr) {
+                    debug(`Could not remove label "${label}" from ${repoFullName}#${issueNum}: ${labelErr.message}`);
+                  }
+                }
+              }
+            }
             if (result.warning) {
               console.log(`[poll] Started session for ${item.id} (warning: ${result.warning})`);
             } else {
