@@ -40,7 +40,13 @@ import os from "os";
 // The /command endpoint can take 30-45s to return headers because it does
 // work before responding. The /message endpoint returns headers in ~1ms.
 // These are generous upper bounds — if exceeded, the server is genuinely stuck.
-export const HEADER_TIMEOUT_MS = 600_000;
+// Short timeout: we only care whether the message was accepted, not whether
+// the LLM finished responding. Opencode processes messages async — the session
+// continues running in the server even if we close the HTTP connection. If
+// headers don't arrive in 30s, the message is almost certainly queued anyway
+// (session.id exists, server logged the request) — treat it as success and
+// move on, rather than blocking the poll loop for minutes.
+export const HEADER_TIMEOUT_MS = 30_000;
 
 /**
  * Read model configuration from a target directory's OpenCode config file.
@@ -706,7 +712,7 @@ export async function sendMessageToSession(serverUrl, sessionId, directory, prom
     } catch (abortErr) {
       clearTimeout(timeoutId);
       if (abortErr.name === 'AbortError' && !headersReceived) {
-        throw new Error(`Server did not confirm acceptance within ${headerTimeout / 1000}s for session ${sessionId}`);
+        throw new Error(`Server did not return headers within ${headerTimeout / 1000}s for session ${sessionId}`);
       }
       throw abortErr;
     } finally {
@@ -912,7 +918,7 @@ export async function createSessionViaApi(serverUrl, sessionCtx, prompt, options
       if (abortErr.name === 'AbortError' && !headersReceived) {
         // Safety timeout fired before headers arrived.
         // The server may or may not have accepted the request — we don't know.
-        throw new Error(`Server did not confirm acceptance within ${headerTimeout / 1000}s for session ${session.id}`);
+        throw new Error(`Server did not return headers within ${headerTimeout / 1000}s for session ${session.id}`);
       }
       throw abortErr;
     } finally {
